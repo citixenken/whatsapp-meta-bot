@@ -225,9 +225,10 @@ whatsapp-meta-bot/
 │   ├── services/
 │   │   └── whatsappService.js
 │   └── utils/
-│       └── logger.js
+│       └── logger.js        # structured logger (info/warn/error + timestamps)
 │
-├── .env
+├── .env                     # local secrets (gitignored, not committed)
+├── .env.example             # template of required env vars (safe to commit)
 ├── package.json
 ├── Dockerfile
 └── README.md
@@ -349,7 +350,14 @@ Meta will send OTP verification.
 
 # Environment Variables
 
-Create a `.env` file:
+Copy the provided template and fill in your own values:
+
+```bash
+cp .env.example .env
+```
+
+The `.env` file holds your secrets and must **never** be committed. The
+`.env.example` file documents the required keys and is safe to commit.
 
 ```env
 PORT=3000
@@ -614,6 +622,69 @@ Before production rollout, implement:
 * Prometheus/Grafana
 * CI/CD pipelines
 * production-grade observability
+
+---
+
+# Production-Grade Enhancements (Roadmap)
+
+The MVP is intentionally minimal. The items below are **deferred** and tracked
+here so the team can harden the service toward production without losing
+context. They are grouped by concern.
+
+## Security & Compliance
+
+* **HMAC webhook signature validation** — verify Meta's `X-Hub-Signature-256`
+  header against the App Secret on every inbound `POST /webhook` to reject
+  spoofed payloads.
+* **Secret management** — move `WHATSAPP_TOKEN`, `VERIFY_TOKEN`, etc. out of
+  `.env` into a managed vault (GCP Secret Manager, AWS Secrets Manager,
+  HashiCorp Vault).
+* **Long-lived / system-user access tokens** — replace the temporary 24h Meta
+  token with a permanent System User token; add automated rotation.
+* **Input validation & sanitization** — schema-validate inbound payloads
+  (e.g. `zod`) before processing.
+* **Rate limiting & abuse protection** — per-sender throttling and a global
+  limiter (`express-rate-limit`) behind an API gateway / WAF.
+
+## Reliability & Architecture
+
+* **Async processing** — acknowledge Meta immediately and push messages onto a
+  queue (Redis/BullMQ or Kafka) for worker-based handling and retries.
+* **Idempotency** — de-duplicate redelivered webhook events using the message
+  `id` and a short-lived Redis key.
+* **Session/state management** — Redis-backed conversation state to support
+  multi-step flows (PIN entry, transactions).
+* **Persistence** — PostgreSQL for users, audit trail, and message history.
+* **Graceful shutdown** — handle `SIGTERM`/`SIGINT` to drain in-flight work.
+
+## Code Quality & Tooling
+
+* **Structured logging** — replace the lightweight logger with `pino`/`winston`
+  (JSON logs, correlation IDs, log levels via env). *(MVP now uses a small
+  structured logger in `src/utils/logger.js` as a stepping stone.)*
+* **Centralized config module** — validate and fail-fast on missing env vars at
+  startup instead of discovering them at request time.
+* **Centralized error-handling middleware** in Express.
+* **TypeScript** migration for type safety.
+* **Testing** — unit tests (Jest/Vitest) for `generateReply` and the webhook
+  handler, plus integration tests with mocked Meta APIs.
+* **Linting/formatting** — ESLint + Prettier, enforced in CI.
+
+## Observability
+
+* **Health/readiness probes** — dedicated `/healthz` and `/readyz` endpoints.
+* **Metrics** — Prometheus counters/histograms (messages in/out, send latency,
+  error rates) with Grafana dashboards.
+* **Tracing** — OpenTelemetry spans across webhook → worker → Graph API.
+* **Alerting** — on send failures, token expiry, and webhook verification
+  failures.
+
+## Delivery
+
+* **CI/CD** — automated build, test, scan, and deploy pipelines.
+* **Containerization hardening** — non-root user, multi-stage Docker build,
+  pinned base image digests, `npm ci` with a committed lockfile.
+* **Orchestration** — Kubernetes/GKE with horizontal pod autoscaling.
 
 ---
 

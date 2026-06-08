@@ -1,4 +1,5 @@
 import axios from "axios";
+import { logger } from "../utils/logger.js";
 
 /**
  * VERIFY webhook (Meta requirement)
@@ -12,7 +13,7 @@ export const verifyWebhook = (req, res) => {
     mode === "subscribe" &&
     token === process.env.VERIFY_TOKEN
   ) {
-    console.log("✅ Webhook verified");
+    logger.info("✅ Webhook verified");
     return res.status(200).send(challenge);
   }
 
@@ -44,19 +45,19 @@ export const handleIncomingMessage = async (req, res) => {
             sendWhatsAppMessage(
               from,
               "⚠️ Only text messages are supported in this MVP."
-            ).catch(console.error);
+            ).catch(err => logger.error("Send error:", err.message));
             continue;
           }
 
           const text = message.text?.body || "";
 
-          console.log(`📩 Incoming from ${from}: ${text}`);
+          logger.info(`📩 Incoming from ${from}: ${text}`);
 
           const reply = generateReply(text);
 
           // IMPORTANT: non-blocking send (Meta best practice)
           sendWhatsAppMessage(from, reply)
-            .catch(err => console.error("Send error:", err.message));
+            .catch(err => logger.error("Send error:", err.message));
         }
       }
     }
@@ -65,7 +66,7 @@ export const handleIncomingMessage = async (req, res) => {
     return res.sendStatus(200);
 
   } catch (error) {
-    console.error("Webhook error:", error.message);
+    logger.error("Webhook error:", error.message);
     return res.sendStatus(200);
   }
 };
@@ -112,9 +113,9 @@ const sendWhatsAppMessage = async (to, body) => {
       }
     });
 
-    console.log(`📤 Sent to ${to}`);
+    logger.info(`📤 Sent to ${to}`);
   } catch (error) {
-    console.error(
+    logger.error(
       "Meta send error:",
       error.response?.data || error.message
     );

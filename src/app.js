@@ -1,5 +1,6 @@
 import express from "express";
 import webhookRoutes from "./routes/webhook.js";
+import { logger } from "./utils/logger.js";
 
 const app = express();
 
@@ -12,8 +13,8 @@ app.get("/", (req, res) => {
 
 // DEBUG endpoint (VERY useful for Meta testing)
 app.post("/debug", (req, res) => {
-  console.log("📦 DEBUG PAYLOAD:");
-  console.log(JSON.stringify(req.body, null, 2));
+  logger.info("📦 DEBUG PAYLOAD:");
+  logger.info(JSON.stringify(req.body, null, 2));
   res.sendStatus(200);
 });
 
