@@ -1,4 +1,4 @@
-# WhatsApp Fintech Bot MVP (Meta Cloud API + Node.js)
+# WhatsApp Fintech Bot MVP (Meta Cloud API + C#/.NET)
 
 ## Overview
 
@@ -9,7 +9,7 @@ The solution demonstrates:
 * Receiving WhatsApp messages from real devices
 * Processing inbound webhook events
 * Sending responses back to users
-* Running a webhook-based Node.js backend
+* Running a webhook-based ASP.NET Core backend
 * Integrating with Meta Graph API
 * Real-device testing via WhatsApp
 
@@ -52,8 +52,8 @@ This MVP intentionally keeps the scope minimal to validate the core messaging ar
           |
           v
 +-------------------+
-| Node.js Backend   |
-| Express API       |
+| .NET Backend      |
+| ASP.NET Core API  |
 +---------+---------+
           |
           | REST API Call
@@ -115,7 +115,7 @@ Payload contains:
 
 ### Step 4
 
-The Node.js backend:
+The .NET backend:
 
 * validates payload
 * extracts the message
@@ -203,12 +203,12 @@ As the solution evolves beyond MVP, the architecture can transition into a more 
 
 | Component          | Technology              |
 | ------------------ | ----------------------- |
-| Backend Runtime    | Node.js                 |
-| Framework          | Express.js              |
+| Backend Runtime    | .NET 10                 |
+| Framework          | ASP.NET Core            |
 | Messaging Platform | Meta WhatsApp Cloud API |
 | Local Tunnel       | ngrok                   |
-| HTTP Client        | Axios                   |
-| Environment Config | dotenv                  |
+| HTTP Client        | HttpClient (HttpClientFactory) |
+| Environment Config | DotNetEnv (.env)        |
 
 ---
 
@@ -218,18 +218,21 @@ As the solution evolves beyond MVP, the architecture can transition into a more 
 whatsapp-meta-bot/
 │
 ├── src/
-│   ├── app.js
-│   ├── server.js
-│   ├── routes/
-│   │   └── webhook.js
-│   ├── services/
-│   │   └── whatsappService.js
-│   └── utils/
-│       └── logger.js        # structured logger (info/warn/error + timestamps)
+│   ├── Program.cs                 # app bootstrap, health + /debug, port binding
+│   ├── Controllers/
+│   │   └── WebhookController.cs    # GET verify + POST messages (/webhook)
+│   ├── Services/
+│   │   ├── IWhatsAppService.cs
+│   │   └── WhatsAppService.cs      # verify, inbound handling, outbound send
+│   ├── Models/
+│   │   ├── WebhookModels.cs        # inbound payload models
+│   │   └── OutboundMessage.cs      # outbound Graph API payload
+│   ├── appsettings.json
+│   ├── appsettings.Development.json
+│   └── WhatsAppMetaBot.csproj
 │
 ├── .env                     # local secrets (gitignored, not committed)
 ├── .env.example             # template of required env vars (safe to commit)
-├── package.json
 ├── Dockerfile
 └── README.md
 ```
@@ -271,14 +274,14 @@ My Apps
 
 ---
 
-## 4. Node.js Installed
+## 4. .NET SDK Installed
 
 Recommended:
 
-* Node.js v20+
+* .NET SDK 10+
 
 Download:
-https://nodejs.org/
+https://dotnet.microsoft.com/download
 
 ---
 
@@ -421,10 +424,10 @@ The same value MUST also be configured inside Meta webhook settings.
 
 # Installation
 
-## Install Dependencies
+## Restore Dependencies
 
 ```bash
-npm install
+dotnet restore src/WhatsAppMetaBot.csproj
 ```
 
 ---
@@ -434,7 +437,7 @@ npm install
 ## Start Server
 
 ```bash
-npm start
+dotnet run --project src/WhatsAppMetaBot.csproj
 ```
 
 Expected output:
@@ -506,7 +509,7 @@ Enable:
 
 Ensure:
 
-* Node server is running
+* .NET server is running
 * ngrok is running
 * webhook verified successfully
 
@@ -571,7 +574,7 @@ Usually caused by:
 Fix:
 
 * generate new temporary token
-* restart Node.js server
+* restart .NET server
 
 ---
 
@@ -642,33 +645,37 @@ context. They are grouped by concern.
 * **Long-lived / system-user access tokens** — replace the temporary 24h Meta
   token with a permanent System User token; add automated rotation.
 * **Input validation & sanitization** — schema-validate inbound payloads
-  (e.g. `zod`) before processing.
+  (e.g. FluentValidation / DataAnnotations) before processing.
 * **Rate limiting & abuse protection** — per-sender throttling and a global
-  limiter (`express-rate-limit`) behind an API gateway / WAF.
+  limiter (ASP.NET Core rate limiting middleware) behind an API gateway / WAF.
 
 ## Reliability & Architecture
 
 * **Async processing** — acknowledge Meta immediately and push messages onto a
-  queue (Redis/BullMQ or Kafka) for worker-based handling and retries.
+  queue (Redis or Kafka, e.g. via a hosted `BackgroundService`) for
+  worker-based handling and retries.
 * **Idempotency** — de-duplicate redelivered webhook events using the message
   `id` and a short-lived Redis key.
 * **Session/state management** — Redis-backed conversation state to support
   multi-step flows (PIN entry, transactions).
 * **Persistence** — PostgreSQL for users, audit trail, and message history.
-* **Graceful shutdown** — handle `SIGTERM`/`SIGINT` to drain in-flight work.
+* **Graceful shutdown** — handle `SIGTERM`/`SIGINT` (via `IHostApplicationLifetime`)
+  to drain in-flight work.
 
 ## Code Quality & Tooling
 
-* **Structured logging** — replace the lightweight logger with `pino`/`winston`
-  (JSON logs, correlation IDs, log levels via env). *(MVP now uses a small
-  structured logger in `src/utils/logger.js` as a stepping stone.)*
+* **Structured logging** — replace the default console logger with a structured
+  provider (e.g. Serilog) emitting JSON logs, correlation IDs, and log levels
+  via configuration. *(MVP uses the built-in `ILogger` abstraction as a
+  stepping stone.)*
 * **Centralized config module** — validate and fail-fast on missing env vars at
-  startup instead of discovering them at request time.
-* **Centralized error-handling middleware** in Express.
-* **TypeScript** migration for type safety.
-* **Testing** — unit tests (Jest/Vitest) for `generateReply` and the webhook
+  startup (e.g. `IOptions` validation) instead of discovering them at request
+  time.
+* **Centralized error-handling middleware** via ASP.NET Core exception handling.
+* **Nullable reference types & analyzers** — enabled and enforced for safety.
+* **Testing** — unit tests (xUnit/NUnit) for `GenerateReply` and the webhook
   handler, plus integration tests with mocked Meta APIs.
-* **Linting/formatting** — ESLint + Prettier, enforced in CI.
+* **Linting/formatting** — `dotnet format` + analyzers, enforced in CI.
 
 ## Observability
 
@@ -683,7 +690,8 @@ context. They are grouped by concern.
 
 * **CI/CD** — automated build, test, scan, and deploy pipelines.
 * **Containerization hardening** — non-root user, multi-stage Docker build,
-  pinned base image digests, `npm ci` with a committed lockfile.
+  pinned base image digests, restore with a committed lockfile
+  (`packages.lock.json`).
 * **Orchestration** — Kubernetes/GKE with horizontal pod autoscaling.
 
 ---
