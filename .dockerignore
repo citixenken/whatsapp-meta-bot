@@ -1,0 +1,17 @@
+# Build the Docker context lean and avoid copying local build output / secrets
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+.git
+.gitignore
+.dockerignore
+.env
+.env.example
+Dockerfile
+README.md
+docs/
+tests/
+.github/
+**/*.user
+**/*.log

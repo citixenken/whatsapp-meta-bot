@@ -6,10 +6,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>WhatsAppMetaBot</RootNamespace>
     <AssemblyName>WhatsAppMetaBot</AssemblyName>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="DotNetEnv" Version="3.1.1" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.7.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WhatsAppMetaBot.Tests" />
   </ItemGroup>
 
 </Project>

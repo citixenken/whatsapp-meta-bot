@@ -39,6 +39,24 @@ public sealed class WebhookValue
 
     [JsonPropertyName("messages")]
     public List<WhatsAppMessage>? Messages { get; set; }
+
+    [JsonPropertyName("statuses")]
+    public List<WhatsAppStatus>? Statuses { get; set; }
+}
+
+public sealed class WhatsAppStatus
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    [JsonPropertyName("recipient_id")]
+    public string? RecipientId { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    public string? Timestamp { get; set; }
 }
 
 public sealed class WhatsAppMessage

@@ -23,5 +23,5 @@ public interface IWhatsAppService
     /// <summary>
     /// Sends a text message to a recipient via the Meta Cloud API.
     /// </summary>
-    Task SendWhatsAppMessageAsync(string to, string body);
+    Task SendWhatsAppMessageAsync(string to, string body, CancellationToken cancellationToken = default);
 }

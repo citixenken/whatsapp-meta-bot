@@ -1,37 +1,48 @@
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
+using WhatsAppMetaBot.Configuration;
 using WhatsAppMetaBot.Models;
 
 namespace WhatsAppMetaBot.Services;
 
 /// <summary>
-/// C#/.NET port of services/whatsappService.js. Handles Meta webhook
-/// verification, inbound message processing and outbound sends through the
-/// Meta WhatsApp Cloud API.
+/// Handles Meta webhook verification, inbound message processing (enqueuing
+/// replies for the background sender) and outbound sends through the Meta
+/// WhatsApp Cloud API.
 /// </summary>
 public sealed class WhatsAppService : IWhatsAppService
 {
+    private static readonly TimeSpan IdempotencyWindow = TimeSpan.FromMinutes(10);
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<WhatsAppService> _logger;
-    private readonly IConfiguration _config;
+    private readonly WhatsAppOptions _options;
+    private readonly IOutboundQueue _queue;
+    private readonly IMemoryCache _cache;
 
     public WhatsAppService(
         HttpClient httpClient,
         ILogger<WhatsAppService> logger,
-        IConfiguration config)
+        IOptions<WhatsAppOptions> options,
+        IOutboundQueue queue,
+        IMemoryCache cache)
     {
         _httpClient = httpClient;
         _logger = logger;
-        _config = config;
+        _options = options.Value;
+        _queue = queue;
+        _cache = cache;
     }
 
     /// <inheritdoc />
     public string? VerifyWebhook(string? mode, string? token, string? challenge)
     {
-        var verifyToken = _config["VERIFY_TOKEN"];
-
-        if (mode == "subscribe" && token == verifyToken)
+        if (mode == "subscribe" && FixedTimeEquals(token, _options.VerifyToken))
         {
-            _logger.LogInformation("✅ Webhook verified");
+            _logger.LogInformation("Webhook verified");
             return challenge;
         }
 
@@ -39,127 +50,138 @@ public sealed class WhatsAppService : IWhatsAppService
     }
 
     /// <inheritdoc />
-    public async Task HandleIncomingMessageAsync(WebhookPayload payload)
+    public Task HandleIncomingMessageAsync(WebhookPayload payload)
     {
-        var entries = payload.Entry ?? new List<WebhookEntry>();
-
-        foreach (var entry in entries)
+        foreach (var entry in payload.Entry ?? new List<WebhookEntry>())
         {
-            var changes = entry.Changes ?? new List<WebhookChange>();
-
-            foreach (var change in changes)
+            foreach (var change in entry.Changes ?? new List<WebhookChange>())
             {
-                var messages = change.Value?.Messages;
-
-                if (messages is null)
-                {
-                    continue;
-                }
-
-                foreach (var message in messages)
-                {
-                    var from = message.From;
-
-                    if (string.IsNullOrEmpty(from))
-                    {
-                        continue;
-                    }
-
-                    // Only handle text messages
-                    if (message.Type != "text")
-                    {
-                        _ = SafeSendAsync(
-                            from,
-                            "⚠️ Only text messages are supported in this MVP.");
-                        continue;
-                    }
-
-                    var text = message.Text?.Body ?? string.Empty;
-
-                    _logger.LogInformation("📩 Incoming from {From}: {Text}", from, text);
-
-                    var reply = GenerateReply(text);
-
-                    // IMPORTANT: non-blocking send (Meta best practice)
-                    _ = SafeSendAsync(from, reply);
-                }
+                HandleStatuses(change.Value?.Statuses);
+                HandleMessages(change.Value?.Messages);
             }
         }
 
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// MVP business logic ported from generateReply in whatsappService.js.
-    /// </summary>
-    private static string GenerateReply(string text)
+    /// <summary>Logs delivery/read/failed status callbacks (CFG-04).</summary>
+    private void HandleStatuses(List<WhatsAppStatus>? statuses)
     {
-        var msg = text.ToLowerInvariant();
-
-        if (msg.Contains("hi") || msg.Contains("hello"))
+        if (statuses is null)
         {
-            return "Hello 👋 Welcome to Fintech MVP Bot";
+            return;
         }
 
-        if (msg.Contains("balance"))
+        foreach (var status in statuses)
         {
-            return "Your balance feature is coming soon 🚧";
+            _logger.LogInformation(
+                "Delivery status {Status} for message {MessageId}",
+                status.Status, status.Id);
+        }
+    }
+
+    private void HandleMessages(List<WhatsAppMessage>? messages)
+    {
+        if (messages is null)
+        {
+            return;
         }
 
-        if (msg.Contains("loan"))
+        foreach (var message in messages)
         {
-            return "Loan services will be available in next phase 📊";
+            var from = message.From;
+
+            if (string.IsNullOrEmpty(from))
+            {
+                continue;
+            }
+
+            // De-duplicate redelivered webhooks by message id (REL-02).
+            if (IsDuplicate(message.Id))
+            {
+                _logger.LogInformation("Skipping duplicate message {MessageId}", message.Id);
+                continue;
+            }
+
+            // Only handle text messages
+            if (message.Type != "text")
+            {
+                Enqueue(from, "⚠️ Only text messages are supported in this MVP.");
+                continue;
+            }
+
+            var text = message.Text?.Body ?? string.Empty;
+
+            _logger.LogInformation(
+                "Incoming text from {From} ({Length} chars)",
+                PiiMasker.MaskPhone(from), text.Length);
+
+            Enqueue(from, ReplyGenerator.Generate(text));
+        }
+    }
+
+    private bool IsDuplicate(string? messageId)
+    {
+        if (string.IsNullOrEmpty(messageId))
+        {
+            return false;
         }
 
-        return "I received your message 👍 (MVP mode)";
+        if (_cache.TryGetValue(messageId, out _))
+        {
+            return true;
+        }
+
+        _cache.Set(messageId, true, IdempotencyWindow);
+        return false;
+    }
+
+    private void Enqueue(string to, string body)
+    {
+        if (!_queue.TryEnqueue(new OutboundJob(to, body)))
+        {
+            _logger.LogWarning("Outbound queue full; dropped message to {To}", PiiMasker.MaskPhone(to));
+        }
     }
 
     /// <inheritdoc />
-    public async Task SendWhatsAppMessageAsync(string to, string body)
+    public async Task SendWhatsAppMessageAsync(string to, string body, CancellationToken cancellationToken = default)
     {
-        var phoneNumberId = _config["PHONE_NUMBER_ID"];
-        var token = _config["WHATSAPP_TOKEN"];
-
-        var url = $"https://graph.facebook.com/v20.0/{phoneNumberId}/messages";
-
         var payload = new OutboundMessage
         {
             To = to,
             Text = new OutboundMessageText { Body = body }
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        using var request = new HttpRequestMessage(HttpMethod.Post, _options.MessagesEndpoint)
         {
             Content = JsonContent.Create(payload)
         };
-        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_options.AccessToken}");
 
-        var response = await _httpClient.SendAsync(request);
+        var response = await _httpClient.SendAsync(request, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            _logger.LogInformation("📤 Sent to {To}", to);
+            _logger.LogInformation("Sent message to {To}", PiiMasker.MaskPhone(to));
         }
         else
         {
-            var error = await response.Content.ReadAsStringAsync();
-            _logger.LogError("Meta send error: {Error}", error);
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogError("Meta send error ({StatusCode}): {Error}", (int)response.StatusCode, error);
         }
     }
 
-    /// <summary>
-    /// Fire-and-forget send wrapper that mirrors the .catch() error logging
-    /// used in the Node.js implementation.
-    /// </summary>
-    private async Task SafeSendAsync(string to, string body)
+    /// <summary>Constant-time comparison for the verify token (SEC-05).</summary>
+    private static bool FixedTimeEquals(string? left, string? right)
     {
-        try
+        if (left is null || right is null)
         {
-            await SendWhatsAppMessageAsync(to, body);
+            return false;
         }
-        catch (Exception ex)
-        {
-            _logger.LogError("Send error: {Message}", ex.Message);
-        }
+
+        var leftBytes = Encoding.UTF8.GetBytes(left);
+        var rightBytes = Encoding.UTF8.GetBytes(right);
+        return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 }
