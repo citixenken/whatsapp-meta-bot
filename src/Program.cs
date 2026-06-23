@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DotNetEnv;
+using Microsoft.Extensions.Options;
 using WhatsAppMetaBot.Configuration;
 using WhatsAppMetaBot.Middleware;
 using WhatsAppMetaBot.Services;
@@ -103,6 +104,18 @@ if (app.Environment.IsDevelopment())
 app.MapControllers();
 
 var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+
+// Warn when webhook signature verification is disabled (SEC-01). It stays
+// optional in the MVP so local testing against Meta's test number works without
+// an App Secret, but APP_SECRET must be set before handling production traffic.
+var whatsAppOptions = app.Services.GetRequiredService<IOptions<WhatsAppOptions>>().Value;
+if (string.IsNullOrWhiteSpace(whatsAppOptions.AppSecret))
+{
+    startupLogger.LogWarning(
+        "APP_SECRET is not configured; inbound webhook signature verification is disabled. " +
+        "Set APP_SECRET before exposing this service to production traffic.");
+}
+
 startupLogger.LogInformation("WhatsApp bot running on port {Port}", port);
 
 app.Run();

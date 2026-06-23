@@ -54,7 +54,9 @@ public sealed class WebhookController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError("Webhook error: {Message}", ex.Message);
+            // Log the full exception (with stack trace) for diagnosability, but
+            // still ack Meta with 200 so it does not retry-storm the webhook.
+            _logger.LogError(ex, "Error processing inbound webhook");
         }
 
         // Always respond fast to Meta
