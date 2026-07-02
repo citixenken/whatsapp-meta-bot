@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Threading.RateLimiting;
 using DotNetEnv;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using WhatsAppMetaBot.Configuration;
 using WhatsAppMetaBot.Middleware;
@@ -49,6 +51,22 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks();
 builder.Services.AddProblemDetails();
 
+// Rate limiting for the public webhook endpoint to blunt request floods and
+// billable-send abuse (defense in depth). Limits are generous and configurable
+// via env so local demos are unaffected; only abnormal bursts get HTTP 429.
+var rateLimitPermit = int.TryParse(builder.Configuration["RATE_LIMIT_PERMIT"], out var permit) ? permit : 300;
+var rateLimitWindowSeconds = int.TryParse(builder.Configuration["RATE_LIMIT_WINDOW_SECONDS"], out var windowSeconds) ? windowSeconds : 60;
+builder.Services.AddRateLimiter(rateLimiter =>
+{
+    rateLimiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    rateLimiter.AddFixedWindowLimiter("webhook", limiter =>
+    {
+        limiter.PermitLimit = rateLimitPermit;
+        limiter.Window = TimeSpan.FromSeconds(rateLimitWindowSeconds);
+        limiter.QueueLimit = 0;
+    });
+});
+
 // In-process outbound pipeline: enqueue on the request thread, send on a worker.
 builder.Services.AddSingleton<IOutboundQueue, OutboundQueue>();
 builder.Services.AddHostedService<OutboundMessageWorker>();
@@ -63,7 +81,12 @@ var app = builder.Build();
 // Centralized exception handling (CFG-03); returns ProblemDetails responses.
 app.UseExceptionHandler();
 
-// HMAC verification for inbound webhooks (SEC-01); no-op until APP_SECRET is set.
+// Throttle inbound requests before the (more expensive) signature check so
+// floods are shed early with HTTP 429.
+app.UseRateLimiter();
+
+// HMAC verification for inbound webhooks (SEC-01). Enforced in every deployed
+// environment; skipped only in Development when APP_SECRET is unset (local demo).
 app.UseMiddleware<WebhookSignatureMiddleware>();
 
 // Basic health check + dedicated liveness/readiness probes (OBS-01).
@@ -105,15 +128,26 @@ app.MapControllers();
 
 var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
 
-// Warn when webhook signature verification is disabled (SEC-01). It stays
-// optional in the MVP so local testing against Meta's test number works without
-// an App Secret, but APP_SECRET must be set before handling production traffic.
+// Enforce webhook signature verification outside Development (SEC-01). Local
+// demos may run without an App Secret (verification is skipped in Development so
+// testing against Meta's test number keeps working), but any deployed
+// environment fails fast rather than silently accepting forgeable webhooks.
 var whatsAppOptions = app.Services.GetRequiredService<IOptions<WhatsAppOptions>>().Value;
 if (string.IsNullOrWhiteSpace(whatsAppOptions.AppSecret))
 {
-    startupLogger.LogWarning(
-        "APP_SECRET is not configured; inbound webhook signature verification is disabled. " +
-        "Set APP_SECRET before exposing this service to production traffic.");
+    if (app.Environment.IsDevelopment())
+    {
+        startupLogger.LogWarning(
+            "APP_SECRET is not configured; inbound webhook signature verification is " +
+            "DISABLED. This is only permitted in the Development environment for local demos.");
+    }
+    else
+    {
+        throw new InvalidOperationException(
+            "APP_SECRET is required outside the Development environment so inbound webhook " +
+            "signatures (X-Hub-Signature-256) are verified. Set APP_SECRET, or run with " +
+            "ASPNETCORE_ENVIRONMENT=Development for local demos.");
+    }
 }
 
 startupLogger.LogInformation("WhatsApp bot running on port {Port}", port);

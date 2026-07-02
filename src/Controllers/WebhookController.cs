@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using WhatsAppMetaBot.Models;
 using WhatsAppMetaBot.Services;
 
@@ -46,6 +47,7 @@ public sealed class WebhookController : ControllerBase
     /// Incoming WhatsApp messages (POST /webhook).
     /// </summary>
     [HttpPost]
+    [EnableRateLimiting("webhook")]
     public async Task<IActionResult> Receive([FromBody] WebhookPayload payload)
     {
         try

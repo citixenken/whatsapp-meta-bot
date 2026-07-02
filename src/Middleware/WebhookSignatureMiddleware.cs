@@ -5,10 +5,11 @@ using WhatsAppMetaBot.Security;
 namespace WhatsAppMetaBot.Middleware;
 
 /// <summary>
-/// Verifies the HMAC signature on inbound webhook POSTs (SEC-01). When no App
-/// Secret is configured (the MVP default) verification is skipped so existing
-/// setups keep working; once APP_SECRET is set, unsigned or forged requests are
-/// rejected with 403.
+/// Verifies the HMAC signature on inbound webhook POSTs (SEC-01). When APP_SECRET
+/// is set, unsigned or forged requests are rejected with 403. Verification is
+/// skipped only in the Development environment when no App Secret is configured
+/// (local demo); outside Development a missing App Secret is rejected (and the
+/// app also fails fast at startup) so the endpoint can never fail open.
 /// </summary>
 public sealed class WebhookSignatureMiddleware
 {
@@ -16,15 +17,18 @@ public sealed class WebhookSignatureMiddleware
 
     private readonly RequestDelegate _next;
     private readonly IOptions<WhatsAppOptions> _options;
+    private readonly IHostEnvironment _environment;
     private readonly ILogger<WebhookSignatureMiddleware> _logger;
 
     public WebhookSignatureMiddleware(
         RequestDelegate next,
         IOptions<WhatsAppOptions> options,
+        IHostEnvironment environment,
         ILogger<WebhookSignatureMiddleware> logger)
     {
         _next = next;
         _options = options;
+        _environment = environment;
         _logger = logger;
     }
 
@@ -40,8 +44,19 @@ public sealed class WebhookSignatureMiddleware
         var appSecret = _options.Value.AppSecret;
         if (string.IsNullOrWhiteSpace(appSecret))
         {
-            // MVP fallback: signature verification disabled until APP_SECRET is set.
-            await _next(context);
+            if (_environment.IsDevelopment())
+            {
+                // Development-only fallback so local demos work without an App
+                // Secret. Startup fails fast outside Development (see Program.cs),
+                // so this branch is only reachable during local development.
+                await _next(context);
+                return;
+            }
+
+            // Defense in depth: never fail open outside Development.
+            _logger.LogError(
+                "APP_SECRET is not configured outside Development; rejecting webhook.");
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
         }
 
