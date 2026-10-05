@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: whatsapp-meta-bot
+  mvc:
+    problemdetails:
+      enabled: true
+
+# Bind to the same host/port the .NET MVP used (default 3000) so the existing
+# ngrok + Meta webhook setup keeps working unchanged.
+server:
+  port: ${PORT:3000}
+  address: 0.0.0.0
+
+# Strongly-typed config mapped from the existing flat env keys (parity with the
+# .NET WhatsAppOptions). Real environment variables / .env values are read here;
+# required values are validated at startup (fail fast on misconfiguration).
+whatsapp:
+  verify-token: ${VERIFY_TOKEN:}
+  access-token: ${WHATSAPP_TOKEN:}
+  phone-number-id: ${PHONE_NUMBER_ID:}
+  app-secret: ${APP_SECRET:}
+  graph-api-base-url: ${GRAPH_API_BASE_URL:https://graph.facebook.com}
+  graph-api-version: ${GRAPH_API_VERSION:v20.0}
+
+# Webhook rate limiting (fixed window). Generous defaults so local demos are
+# unaffected; only abnormal bursts get HTTP 429.
+rate-limit:
+  permit: ${RATE_LIMIT_PERMIT:300}
+  window-seconds: ${RATE_LIMIT_WINDOW_SECONDS:60}
+
+logging:
+  level:
+    root: INFO
+    org.springframework.web: WARN

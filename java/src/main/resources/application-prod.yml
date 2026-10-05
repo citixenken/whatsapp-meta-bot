@@ -1,0 +1,7 @@
+# Production profile. Emits structured JSON logs to the console (ECS format),
+# the Spring Boot equivalent of the .NET AddJsonConsole() used outside
+# Development. Activate with SPRING_PROFILES_ACTIVE=prod.
+logging:
+  structured:
+    format:
+      console: ecs

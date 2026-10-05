@@ -1,0 +1,10 @@
+target/
+*.class
+
+# Local secrets — never commit
+.env
+
+# IDE
+.idea/
+*.iml
+.vscode/
